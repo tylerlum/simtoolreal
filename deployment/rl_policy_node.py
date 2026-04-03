@@ -17,20 +17,16 @@ from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import JointState
 from termcolor import colored
 
+from deployment.rl_player_utils import read_cfg
 from dextoolbench.objects import (
     NAME_TO_OBJECT,
 )
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
-    Q_LOWER_LIMITS_restricted_np as Q_LOWER_LIMITS_np,
-)
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
-    Q_UPPER_LIMITS_restricted_np as Q_UPPER_LIMITS_np,
-)
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
+from isaacgymenvs.utils.observation_action_utils import (
     compute_joint_pos_targets,
     compute_observation,
     create_urdf_object,
 )
+from isaacgymenvs.utils.robot_info import get_num_observations, get_robot_spec
 
 FORCE_FIXED_ORIENTATION = False
 
@@ -259,19 +255,48 @@ class RLPolicyNode:
             self.object_pose_history: list[np.ndarray] = []
             self.goal_object_pose_history: list[np.ndarray] = []
 
-        # Publisher for iiwa and sharpa joint commands
+        # Faster with CPU
+        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"
+
+        assert self.config_path.exists(), (
+            f"config_path: {self.config_path} does not exist"
+        )
+        assert self.checkpoint_path.exists(), (
+            f"checkpoint_path: {self.checkpoint_path} does not exist"
+        )
+
+        self.cfg = read_cfg(str(self.config_path), device=self.device)
+        self.robot_asset_file = self.cfg["task"]["env"]["asset"]["robot"]
+        self.robot_spec = get_robot_spec(self.robot_asset_file)
+        self.hand_topic = f"/{self.robot_spec.name}"
+        self.obs_list = self.cfg["task"]["env"]["obsList"]
+        self.num_observations = get_num_observations(
+            self.robot_asset_file, self.obs_list
+        )
+        self.num_actions = self.robot_spec.num_hand_arm_dofs
+        self.q_lower_limits = self.robot_spec.restricted_lower_limits
+        self.q_upper_limits = self.robot_spec.restricted_upper_limits
+        if self.robot_spec.name == "sharpa":
+            self.hand_command_joint_names = [
+                f"joint_{i}.0" for i in range(self.robot_spec.num_hand_dofs)
+            ]
+        else:
+            self.hand_command_joint_names = list(self.robot_spec.joint_names[7:])
+
+        # Publisher for iiwa and hand joint commands
         self.iiwa_joint_cmd_pub = rospy.Publisher(
             "/iiwa/joint_cmd", JointState, queue_size=1
         )
-        self.sharpa_joint_cmd_pub = rospy.Publisher(
-            "/sharpa/joint_cmd", JointState, queue_size=1
+        self.hand_joint_cmd_pub = rospy.Publisher(
+            f"{self.hand_topic}/joint_cmd", JointState, queue_size=1
         )
 
         # Variables to store the latest messages
         self.object_pose_msg = None
         self.goal_object_pose_msg = None
         self.iiwa_joint_state_msg = None
-        self.sharpa_joint_state_msg = None
+        self.hand_joint_state_msg = None
 
         # Subscribers
         self.object_pose_sub = rospy.Subscriber(
@@ -292,25 +317,11 @@ class RLPolicyNode:
             self.iiwa_joint_state_callback,
             queue_size=1,
         )
-        self.sharpa_joint_state_sub = rospy.Subscriber(
-            "/sharpa/joint_states",
+        self.hand_joint_state_sub = rospy.Subscriber(
+            f"{self.hand_topic}/joint_states",
             JointState,
-            self.sharpa_joint_state_callback,
+            self.hand_joint_state_callback,
             queue_size=1,
-        )
-
-        # RL Player setup
-        # Faster with CPU
-        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
-        self.num_observations = 140  # Update this number based on actual dimensions
-        self.num_actions = 29
-
-        assert self.config_path.exists(), (
-            f"config_path: {self.config_path} does not exist"
-        )
-        assert self.checkpoint_path.exists(), (
-            f"checkpoint_path: {self.checkpoint_path} does not exist"
         )
 
         # Create the RL player
@@ -321,14 +332,12 @@ class RLPolicyNode:
             checkpoint_path=str(self.checkpoint_path),
             device=self.device,
         )
-        self.obs_list = self.player.cfg["task"]["env"]["obsList"]
 
         # ROS rate
         self.control_dt = 1.0 / 60
 
         # Set up chain
-        robot_name = "iiwa14_left_sharpa_adjusted_restricted"
-        self.urdf_object = create_urdf_object(robot_name=robot_name)
+        self.urdf_object = create_urdf_object(self.robot_asset_file)
 
         # State: prev_targets
         self.prev_targets = None
@@ -344,10 +353,16 @@ class RLPolicyNode:
             self.q_targets_from_file = data.robot_joint_pos_targets_array
             T, D = self.q_targets_from_file.shape
             print(f"T: {T}, D: {D}")
-            assert D == 29, f"D: {D}, expected: 29"
+            assert D == self.num_actions, (
+                f"D: {D}, expected: {self.num_actions}"
+            )
             self.current_step = 0
 
         if self.use_relative_object_pose_once_lifted:
+            if self.robot_spec.name != "sharpa":
+                raise NotImplementedError(
+                    "use_relative_object_pose_once_lifted is currently only wired for the Sharpa hand path."
+                )
             # ##############################################################################
             # Signal handling to save relative object pose once lifted
             # ##############################################################################
@@ -371,8 +386,8 @@ class RLPolicyNode:
     def iiwa_joint_state_callback(self, msg: JointState):
         self.iiwa_joint_state_msg = msg
 
-    def sharpa_joint_state_callback(self, msg: JointState):
-        self.sharpa_joint_state_msg = msg
+    def hand_joint_state_callback(self, msg: JointState):
+        self.hand_joint_state_msg = msg
 
     def create_observation(
         self,
@@ -380,36 +395,36 @@ class RLPolicyNode:
         # Ensure all messages are received before processing
         if (
             self.iiwa_joint_state_msg is None
-            or self.sharpa_joint_state_msg is None
+            or self.hand_joint_state_msg is None
             or self.object_pose_msg is None
             or self.goal_object_pose_msg is None
         ):
             warn_every(
-                f"Waiting for all messages to be received... iiwa_joint_state_msg: {var_to_is_none_str(self.iiwa_joint_state_msg)}, sharpa_joint_state_msg: {var_to_is_none_str(self.sharpa_joint_state_msg)}, object_pose_msg: {var_to_is_none_str(self.object_pose_msg)}, goal_object_pose_msg: {var_to_is_none_str(self.goal_object_pose_msg)}",
+                f"Waiting for all messages to be received... iiwa_joint_state_msg: {var_to_is_none_str(self.iiwa_joint_state_msg)}, hand_joint_state_msg: {var_to_is_none_str(self.hand_joint_state_msg)}, object_pose_msg: {var_to_is_none_str(self.object_pose_msg)}, goal_object_pose_msg: {var_to_is_none_str(self.goal_object_pose_msg)}",
                 n_seconds=1.0,
             )
             return None, None, None
 
         iiwa_joint_state_msg = copy.copy(self.iiwa_joint_state_msg)
-        sharpa_joint_state_msg = copy.copy(self.sharpa_joint_state_msg)
+        hand_joint_state_msg = copy.copy(self.hand_joint_state_msg)
         object_pose_msg = copy.copy(self.object_pose_msg)
         goal_object_pose_msg = copy.copy(self.goal_object_pose_msg)
 
         timestamp_object_pose = object_pose_msg.header.stamp
         timestamp_iiwa_joint_state = iiwa_joint_state_msg.header.stamp
-        timestamp_sharpa_joint_state = sharpa_joint_state_msg.header.stamp
+        timestamp_hand_joint_state = hand_joint_state_msg.header.stamp
         min_timestamp = min(
             timestamp_object_pose,
             timestamp_iiwa_joint_state,
-            timestamp_sharpa_joint_state,
+            timestamp_hand_joint_state,
         )
 
         # Concatenate the data from joint states and object pose
         iiwa_position = np.array(iiwa_joint_state_msg.position)
         iiwa_velocity = np.array(iiwa_joint_state_msg.velocity)
 
-        sharpa_position = np.array(sharpa_joint_state_msg.position)
-        sharpa_velocity = np.array(sharpa_joint_state_msg.velocity)
+        hand_position = np.array(hand_joint_state_msg.position)
+        hand_velocity = np.array(hand_joint_state_msg.velocity)
 
         T_R_O = pose_msg_to_T(object_pose_msg.pose)
         T_R_G = pose_msg_to_T(goal_object_pose_msg)
@@ -425,8 +440,8 @@ class RLPolicyNode:
             [goal_object_pos_W, goal_object_quat_xyzw_W]
         )
 
-        q = np.concatenate([iiwa_position, sharpa_position])
-        qd = np.concatenate([iiwa_velocity, sharpa_velocity])
+        q = np.concatenate([iiwa_position, hand_position])
+        qd = np.concatenate([iiwa_velocity, hand_velocity])
 
         prev_action_targets = self.prev_targets if self.prev_targets is not None else q
         with torch.no_grad():
@@ -439,6 +454,7 @@ class RLPolicyNode:
                 object_scales=self.object_scales[None],
                 urdf=self.urdf_object,
                 obs_list=self.obs_list,
+                robot_asset_file=self.robot_asset_file,
             )
             observation = torch.from_numpy(observation).float().to(self.device)
         assert_equals(
@@ -522,35 +538,12 @@ class RLPolicyNode:
         ]
         iiwa_msg.position = joint_pos_targets[:7].tolist()
         self.iiwa_joint_cmd_pub.publish(iiwa_msg)
-        sharpa_msg = JointState()
-        sharpa_msg.header.stamp = rospy.Time.now()
-        sharpa_msg.header.frame_id = ""
-        sharpa_msg.name = [
-            "joint_0.0",
-            "joint_1.0",
-            "joint_2.0",
-            "joint_3.0",
-            "joint_4.0",
-            "joint_5.0",
-            "joint_6.0",
-            "joint_7.0",
-            "joint_8.0",
-            "joint_9.0",
-            "joint_10.0",
-            "joint_11.0",
-            "joint_12.0",
-            "joint_13.0",
-            "joint_14.0",
-            "joint_15.0",
-            "joint_16.0",
-            "joint_17.0",
-            "joint_18.0",
-            "joint_19.0",
-            "joint_20.0",
-            "joint_21.0",
-        ]
-        sharpa_msg.position = joint_pos_targets[7:].tolist()
-        self.sharpa_joint_cmd_pub.publish(sharpa_msg)
+        hand_msg = JointState()
+        hand_msg.header.stamp = rospy.Time.now()
+        hand_msg.header.frame_id = ""
+        hand_msg.name = self.hand_command_joint_names
+        hand_msg.position = joint_pos_targets[7:].tolist()
+        self.hand_joint_cmd_pub.publish(hand_msg)
 
     def _initialize_relative_object_pose_logic(
         self,
@@ -1130,14 +1123,15 @@ class RLPolicyNode:
                 arm_moving_average=DUMMY_ARM_MOVING_AVERAGE,
                 hand_dof_speed_scale=DUMMY_HAND_DOF_SPEED_SCALE,
                 dt=DUMMY_DT,
+                robot_asset_file=self.robot_asset_file,
             )
 
             # We do not actually use the joint pos targets computed by the policy, we use the actual joint states so it doesn't move
             joint_pos_targets = np.clip(
                 q[None],
                 # self.prev_targets[None],
-                Q_LOWER_LIMITS_np,
-                Q_UPPER_LIMITS_np,
+                self.q_lower_limits,
+                self.q_upper_limits,
             )
 
             # Publish the targets
@@ -1190,14 +1184,15 @@ class RLPolicyNode:
                 arm_moving_average=self.arm_moving_average,
                 hand_dof_speed_scale=self.hand_dof_speed_scale,
                 dt=DT,
+                robot_asset_file=self.robot_asset_file,
             )
             assert_equals(joint_pos_targets.shape, (1, self.num_actions))
 
             # Clamp
             joint_pos_targets = np.clip(
                 joint_pos_targets,
-                Q_LOWER_LIMITS_np,
-                Q_UPPER_LIMITS_np,
+                self.q_lower_limits,
+                self.q_upper_limits,
             )
 
             if self.overwrite_targets_filepath is not None:

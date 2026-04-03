@@ -1,0 +1,19 @@
+name: Auto Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auto Release
+        uses: wuji-technology/.github/actions/auto-release@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}

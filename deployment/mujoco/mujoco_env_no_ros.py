@@ -13,15 +13,14 @@ from deployment.mujoco.mujoco_sim import (
     MujocoSimConfig,
 )
 from deployment.rl_player import RlPlayer
+from deployment.rl_player_utils import read_cfg
 from dextoolbench.objects import NAME_TO_OBJECT
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
+from isaacgymenvs.utils.observation_action_utils import (
     compute_joint_pos_targets,
     compute_observation,
     create_urdf_object,
 )
-
-N_OBS = 140
-N_ACT = 29
+from isaacgymenvs.utils.robot_info import get_num_observations, get_robot_spec
 
 
 def warn(message: str):
@@ -44,6 +43,7 @@ class MujocoEnvNoRos:
         control_dt: float,
         device: str,
         obs_list: list[str],
+        robot_asset_file: str,
     ):
         self.sim = sim
         self.object_scales = object_scales
@@ -54,6 +54,7 @@ class MujocoEnvNoRos:
         self.control_dt = control_dt
         self.device = device
         self.obs_list = obs_list
+        self.robot_asset_file = robot_asset_file
 
     def compute_observation(self) -> torch.Tensor:
         sim_state = self.sim.get_sim_state()
@@ -80,13 +81,9 @@ class MujocoEnvNoRos:
             object_scales=self.object_scales[None],
             urdf=self.urdf,
             obs_list=self.obs_list,
+            robot_asset_file=self.robot_asset_file,
         )
         observation = torch.from_numpy(observation).float().to(self.device)
-
-        assert observation.shape == (
-            1,
-            N_OBS,
-        ), f"observation.shape: {observation.shape}, expected: (1, {N_OBS})"
         return observation
 
     def step(self, action: torch.Tensor) -> None:
@@ -97,6 +94,7 @@ class MujocoEnvNoRos:
             arm_moving_average=self.arm_moving_average,
             hand_dof_speed_scale=self.hand_dof_speed_scale,
             dt=self.control_dt,
+            robot_asset_file=self.robot_asset_file,
         )
         self.sim.set_robot_joint_pos_targets(joint_pos_targets[0])
 
@@ -155,17 +153,26 @@ def main():
             goal_object_start_quat_wxyz=np.array([0.0, 0.0, 0.0, 1.0]),
         )
     )
+    cfg = read_cfg(str(args.config_path), device=device)
+    robot_asset_file = cfg["task"]["env"]["asset"]["robot"]
+    robot_spec = get_robot_spec(robot_asset_file)
+    if robot_spec.name == "wuji":
+        raise NotImplementedError(
+            "WUJI support has been added to the Isaac Gym and ROS paths, but deployment/mujoco/mujoco_sim.py is still Sharpa-specific."
+        )
+    obs_list = cfg["task"]["env"]["obsList"]
+    num_observations = get_num_observations(robot_asset_file, obs_list)
+    num_actions = robot_spec.num_hand_arm_dofs
     policy = RlPlayer(
-        num_observations=N_OBS,
-        num_actions=N_ACT,
+        num_observations=num_observations,
+        num_actions=num_actions,
         config_path=args.config_path,
         checkpoint_path=args.checkpoint_path,
         device=device,
     )
 
-    urdf = create_urdf_object(robot_name="iiwa14_left_sharpa_adjusted_restricted")
+    urdf = create_urdf_object(robot_asset_file)
 
-    obs_list = policy.cfg["task"]["env"]["obsList"]
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print(f"obs_list: {obs_list}")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -180,6 +187,7 @@ def main():
         control_dt=CONTROL_DT,
         device=device,
         obs_list=obs_list,
+        robot_asset_file=robot_asset_file,
     )
 
     while True:

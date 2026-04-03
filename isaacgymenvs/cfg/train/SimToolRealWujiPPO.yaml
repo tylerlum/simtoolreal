@@ -1,0 +1,7 @@
+defaults:
+  - SimToolRealPPO
+  - _self_
+
+params:
+  config:
+    name: ${resolve_default:SimToolRealWujiPPO,${....experiment}}

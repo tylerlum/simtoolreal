@@ -170,6 +170,117 @@ python isaacgymenvs/launch_training.py \
 --num_envs 12288
 ```
 
+## WUJI Hand
+
+This repository now includes a parallel WUJI-hand path in addition to the original Sharpa-hand setup.
+
+### Included WUJI Assets
+
+The official WUJI hand description assets are vendored into:
+
+```
+assets/urdf/wuji_hand_description/
+```
+
+The mounted KUKA + WUJI robot used by the simulator is:
+
+```
+assets/urdf/kuka_wuji_description/iiwa14_left_wuji_adjusted_restricted.urdf
+```
+
+The integration follows the same pattern as the existing Sharpa setup:
+
+* robot-specific joint limits, fingertip links, and observation layouts are selected automatically from the robot asset path
+* the RL policy node switches hand topics based on the robot type (`/sharpa/*` or `/wuji/*`)
+* WUJI real-hand communication is handled by `deployment/wuji_node.py`
+
+Official upstream WUJI repositories used for the integration:
+
+* [wuji-technology/wuji-hand-description](https://github.com/wuji-technology/wuji-hand-description)
+* [wuji-technology/wujihandpy](https://github.com/wuji-technology/wujihandpy)
+* [wuji-technology/wuji-retargeting](https://github.com/wuji-technology/wuji-retargeting)
+
+### Training a WUJI Policy
+
+The existing `isaacgymenvs/launch_training.py` wrapper is still hardcoded to the original Sharpa training task, so for WUJI training you should launch Isaac Gym directly with the WUJI task and train configs:
+
+```bash
+python -m isaacgymenvs.train \
+    task=SimToolRealWuji \
+    train=SimToolRealWujiPPO \
+    headless=True \
+    experiment=wuji_train_$(date +%Y-%m-%d_%H-%M-%S)
+```
+
+To finetune from an existing checkpoint:
+
+```bash
+python -m isaacgymenvs.train \
+    task=SimToolRealWuji \
+    train=SimToolRealWujiPPO \
+    headless=True \
+    checkpoint=<checkpoint_path> \
+    experiment=wuji_finetune_$(date +%Y-%m-%d_%H-%M-%S)
+```
+
+If you want to reduce GPU memory usage, override `task.env.numEnvs`:
+
+```bash
+python -m isaacgymenvs.train \
+    task=SimToolRealWuji \
+    train=SimToolRealWujiPPO \
+    headless=True \
+    task.env.numEnvs=12288 \
+    experiment=wuji_train_12288_$(date +%Y-%m-%d_%H-%M-%S)
+```
+
+### WUJI Sim2Real / Sim2Sim Notes
+
+For WUJI deployment, the arm topics remain unchanged:
+
+* `/iiwa/joint_states`
+* `/iiwa/joint_cmd`
+
+The hand topics become:
+
+* `/wuji/joint_states`
+* `/wuji/joint_cmd`
+
+Run the WUJI hand bridge with:
+
+```bash
+source .venv/bin/activate
+python deployment/wuji_node.py
+```
+
+If you need to target a specific hand:
+
+```bash
+source .venv/bin/activate
+python deployment/wuji_node.py --serial-number <serial_number>
+```
+
+To home the full IIWA + WUJI system:
+
+```bash
+python deployment/home_wuji_robot.py
+```
+
+The generic policy node will detect the robot type from the policy config:
+
+```bash
+python deployment/rl_policy_node.py \
+    --policy_path <wuji_policy_dir> \
+    --object_name claw_hammer
+```
+
+### Current WUJI Limitations
+
+* The combined KUKA-to-WUJI mount transform in `assets/urdf/kuka_wuji_description/iiwa14_left_wuji_adjusted_restricted.urdf` is an informed approximation and should be calibrated against your actual hardware.
+* WUJI Isaac Gym hand drive gains are approximate because the upstream WUJI repos expose MuJoCo-oriented defaults rather than Isaac Gym tuning values.
+* The MuJoCo deployment path is still Sharpa-specific; `deployment/mujoco/mujoco_env_no_ros.py` now fails fast for WUJI instead of silently running the wrong robot path.
+* The optional `use_relative_object_pose_once_lifted` path in `deployment/rl_policy_node.py` remains Sharpa-only.
+
 ## DexToolBench
 
 ### Downloading the DexToolBench Dataset

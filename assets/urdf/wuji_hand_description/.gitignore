@@ -1,0 +1,13 @@
+.vscode/
+
+build/
+install/
+log/
+
+__pycache__/
+
+*.tmp.urdf
+
+# UrdfConverter auto-generated configs (contain local absolute paths)
+usd/*/config.yaml
+usd/*/.asset_hash

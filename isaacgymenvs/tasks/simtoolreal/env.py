@@ -62,12 +62,12 @@ from isaacgymenvs.tasks.simtoolreal.utils import (
     tolerance_curriculum,
     tolerance_successes_objective,
 )
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
-    OBS_NAMES,
+from isaacgymenvs.utils.observation_action_utils import (
     compute_joint_pos_targets,
     compute_observation,
     create_urdf_object,
 )
+from isaacgymenvs.utils.robot_info import get_obs_names, get_robot_spec
 from isaacgymenvs.utils.torch_jit_utils import (
     get_axis_params,
     quat_rotate,
@@ -111,22 +111,18 @@ class SimToolReal(VecTask):
         )
 
         self.robot_asset_file: str = self.cfg["env"]["asset"]["robot"]
+        self.robot_spec = get_robot_spec(self.robot_asset_file)
+        self.obs_names = get_obs_names(self.robot_asset_file)
 
         self.clamp_abs_observations: float = self.cfg["env"]["clampAbsObservations"]
 
         self.privileged_actions = self.cfg["env"]["privilegedActions"]
         self.privileged_actions_torque = self.cfg["env"]["privilegedActionsTorque"]
 
-        # 4 joints for index, middle, ring, and thumb and 7 for kuka arm
-        self.num_arm_dofs = 7
-        self.num_finger_dofs = 4
-        self.num_fingertips = 4
-        self.num_hand_dofs = self.num_finger_dofs * self.num_fingertips
-
-        if self.use_sharpa:
-            self.num_fingertips = 5
-            self.num_hand_dofs = 22
-            self.num_finger_dofs = None  # Different per finger
+        self.num_arm_dofs = self.robot_spec.num_arm_dofs
+        self.num_finger_dofs = None
+        self.num_fingertips = self.robot_spec.num_fingertips
+        self.num_hand_dofs = self.robot_spec.num_hand_dofs
         self.num_hand_arm_dofs = self.num_hand_dofs + self.num_arm_dofs
 
         self.num_robot_actions = self.num_hand_arm_dofs
@@ -245,48 +241,9 @@ class SimToolReal(VecTask):
 
         self.num_keypoints = len(self.keypoints_offsets)
 
-        self.fingertips = [
-            "index_link_3",
-            "middle_link_3",
-            "ring_link_3",
-            "thumb_link_3",
-        ]
-        self.fingertip_offsets = np.array(
-            [[0.05, 0.005, 0], [0.05, 0.005, 0], [0.05, 0.005, 0], [0.06, 0.005, 0]],
-            dtype=np.float32,
-        )
-
-        if self.use_sharpa:
-            if self.use_right_sharpa:
-                self.fingertips = [
-                    "right_index_DP",
-                    "right_middle_DP",
-                    "right_ring_DP",
-                    "right_thumb_DP",
-                    "right_pinky_DP",
-                ]
-            elif self.use_left_sharpa:
-                self.fingertips = [
-                    "left_index_DP",
-                    "left_middle_DP",
-                    "left_ring_DP",
-                    "left_thumb_DP",
-                    "left_pinky_DP",
-                ]
-            else:
-                raise ValueError(f"Unknown sharpa type: {self.use_sharpa}")
-            self.fingertip_offsets = np.array(
-                [
-                    [0.02, 0.002, 0],
-                    [0.02, 0.002, 0],
-                    [0.02, 0.002, 0],
-                    [0.02, 0.002, 0],
-                    [0.02, 0.002, 0],
-                ],
-                dtype=np.float32,
-                # [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=np.float32
-            )
-        self.palm_offset = np.array([-0.00, -0.02, 0.16], dtype=np.float32)
+        self.fingertips = list(self.robot_spec.fingertip_body_names)
+        self.fingertip_offsets = self.robot_spec.fingertip_offsets.copy()
+        self.palm_offset = self.robot_spec.palm_offset.copy()
 
         assert self.num_fingertips == len(self.fingertips)
 
@@ -470,12 +427,8 @@ class SimToolReal(VecTask):
         )
 
         desired_kuka_pos = torch.tensor(
-            [-1.571, 1.571, -0.000, 1.376, -0.000, 1.485, 2.358]
-        )  # pose v1
-        if self.use_sharpa:
-            desired_kuka_pos = torch.tensor(
-                [-1.571, 1.571, -0.000, 1.376, -0.000, 1.485, 1.308]
-            )  # same as above but 60 deg offset for the mount
+            [-1.571, 1.571, -0.000, 1.376, -0.000, 1.485, 1.308]
+        )
 
         START_HIGHER = self.cfg["env"]["startArmHigher"]
         if START_HIGHER:
@@ -1920,6 +1873,9 @@ class SimToolReal(VecTask):
             assert name in body_names, f"Finger {name} not found in asset {robot_asset}"
         has_iiwa14 = "iiwa14_link_7" in body_names
         assert has_iiwa14, f"iiwa14_link_7 not found in asset {robot_asset}"
+        assert self.robot_spec.palm_body_name in body_names, (
+            f"Palm body {self.robot_spec.palm_body_name} not found in asset {robot_asset}"
+        )
 
         self.fingertip_handles = [
             self.gym.find_asset_rigid_body_index(robot_asset, name)
@@ -1935,13 +1891,10 @@ class SimToolReal(VecTask):
                 for ft_handle in self.fingertip_handles
             ]
 
-        if has_iiwa14:
-            self.robot_name = "iiwa14"
-            self.palm_handle = self.gym.find_asset_rigid_body_index(
-                robot_asset, "iiwa14_link_7"
-            )
-        else:
-            raise ValueError(f"iiwa14_link_7 not found in asset {robot_asset}")
+        self.robot_name = "iiwa14"
+        self.palm_handle = self.gym.find_asset_rigid_body_index(
+            robot_asset, self.robot_spec.palm_body_name
+        )
 
         # this rely on the fact that objects are added right after the arms in terms of create_actor()
         self.object_rb_handles = list(
@@ -3206,9 +3159,7 @@ class SimToolReal(VecTask):
         if CHECK_WITH_COMPUTED_OBS:
             # Create urdf object
             if not hasattr(self, "urdf_object"):
-                self.urdf_object = create_urdf_object(
-                    robot_name="iiwa14_left_sharpa_adjusted_restricted"
-                )
+                self.urdf_object = create_urdf_object(self.robot_asset_file)
 
             computed_obs = compute_observation(
                 q=self.arm_hand_dof_pos.cpu().numpy(),
@@ -3219,18 +3170,19 @@ class SimToolReal(VecTask):
                 object_scales=self.object_scales.cpu().numpy(),
                 urdf=self.urdf_object,
                 obs_list=self.obs_list,
+                robot_asset_file=self.robot_asset_file,
             )
             computed_obs = torch.from_numpy(computed_obs).float().to(self.device)
 
             # Validate
-            assert computed_obs.shape == (self.num_envs, len(OBS_NAMES)), (
-                f"computed_obs.shape: {computed_obs.shape}, expected: ({self.num_envs}, {len(OBS_NAMES)})"
+            assert computed_obs.shape == (self.num_envs, len(self.obs_names)), (
+                f"computed_obs.shape: {computed_obs.shape}, expected: ({self.num_envs}, {len(self.obs_names)})"
             )
             assert self.obs_buf.shape == computed_obs.shape, (
                 f"self.obs_buf.shape: {self.obs_buf.shape}, expected: {computed_obs.shape}"
             )
             num_errors = 0
-            for i, name in enumerate(OBS_NAMES):
+            for i, name in enumerate(self.obs_names):
                 val_orig = self.obs_buf[0, i].item()
                 val_computed = computed_obs[0, i].item()
                 print(
@@ -3822,6 +3774,7 @@ class SimToolReal(VecTask):
                 arm_moving_average=self.arm_moving_average,
                 hand_dof_speed_scale=self.hand_dof_speed_scale,
                 dt=self.dt,
+                robot_asset_file=self.robot_asset_file,
             )
             computed_joint_pos_targets = (
                 torch.from_numpy(computed_joint_pos_targets).float().to(self.device)
@@ -4432,6 +4385,10 @@ class SimToolReal(VecTask):
     @property
     def use_left_sharpa(self) -> bool:
         return "left_sharpa" in self.cfg["env"]["asset"]["robot"].lower()
+
+    @property
+    def use_wuji(self) -> bool:
+        return "wuji" in self.cfg["env"]["asset"]["robot"].lower()
 
     @property
     def hand_moving_average(self) -> float:
@@ -5184,6 +5141,7 @@ class SimToolReal(VecTask):
         # Turn off self-collisions for adjacent links
         from isaacgymenvs.tasks.simtoolreal.adjacent_links import (
             LEFT_SHARPA_KUKA_LINK_TO_ADJACENT_LINKS,
+            LEFT_WUJI_KUKA_LINK_TO_ADJACENT_LINKS,
             RIGHT_SHARPA_KUKA_LINK_TO_ADJACENT_LINKS,
         )
 
@@ -5194,8 +5152,10 @@ class SimToolReal(VecTask):
                 link_to_adjacent_links = LEFT_SHARPA_KUKA_LINK_TO_ADJACENT_LINKS
             else:
                 raise ValueError(f"Invalid use_sharpa: {self.use_sharpa}")
+        elif self.use_wuji:
+            link_to_adjacent_links = LEFT_WUJI_KUKA_LINK_TO_ADJACENT_LINKS
         else:
-            raise ValueError(f"Invalid use_sharpa: {self.use_sharpa}")
+            raise ValueError(f"Unsupported robot asset: {self.robot_asset_file}")
 
         assert set(link_to_adjacent_links.keys()).issubset(rb_names), (
             f"Some links are not in the asset {robot_asset}, rb_names: {rb_names}, link_to_adjacent_links: {link_to_adjacent_links}, only in link_to_adjacent_links: {set(link_to_adjacent_links.keys()) - set(rb_names)}, only in rb_names: {set(rb_names) - set(link_to_adjacent_links.keys())}"

@@ -1,0 +1,9 @@
+defaults:
+  - SimToolReal
+  - _self_
+
+name: SimToolRealWuji
+
+env:
+  asset:
+    robot: "urdf/kuka_wuji_description/iiwa14_left_wuji_adjusted_restricted.urdf"

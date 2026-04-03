@@ -16,15 +16,12 @@ from termcolor import colored
 
 from deployment.isaac.isaac_env import create_env
 from deployment.rl_player import RlPlayer
-from isaacgymenvs.utils.observation_action_utils_sharpa import (
+from isaacgymenvs.utils.observation_action_utils import (
     compute_joint_pos_targets,
     compute_observation,
     create_urdf_object,
 )
 from isaacgymenvs.utils.utils import get_repo_root_dir
-
-N_OBS = 140
-N_ACT = 29
 
 HAND_MOVING_AVERAGE = 0.1
 ARM_MOVING_AVERAGE = 0.05
@@ -46,15 +43,18 @@ class IsaacEnvNoRos:
         control_dt: float,
         device: str,
         urdf: yourdfpy.URDF,
+        robot_asset_file: str,
     ):
         self.env = env
         self.control_dt = control_dt
         self.device = device
         self.urdf = urdf
+        self.robot_asset_file = robot_asset_file
+        self.num_actions = self.env.cfg["env"]["numActions"]
 
     def reset(self) -> torch.Tensor:
         obs, _, _, _ = self.env.step(
-            torch.zeros((self.env.num_envs, N_ACT), device=self.device)
+            torch.zeros((self.env.num_envs, self.num_actions), device=self.device)
         )
         return obs["obs"]
 
@@ -66,6 +66,7 @@ class IsaacEnvNoRos:
             arm_moving_average=ARM_MOVING_AVERAGE,
             hand_dof_speed_scale=HAND_DOF_SPEED_SCALE,
             dt=self.control_dt,
+            robot_asset_file=self.robot_asset_file,
         )
         joint_pos_targets = torch.from_numpy(joint_pos_targets).float().to(self.device)
 
@@ -96,6 +97,7 @@ class IsaacEnvNoRos:
             object_scales=object_scales.cpu().numpy(),
             urdf=self.urdf,
             obs_list=self.env.obs_list,
+            robot_asset_file=self.robot_asset_file,
         )
         new_obs = torch.from_numpy(new_obs).float().to(self.device)
 
@@ -106,11 +108,12 @@ class IsaacEnvNoRos:
             print(f"diff.max() = {diff.max()}")
             print(f"diff.argsort() = {diff.argsort()}")
 
-            from isaacgymenvs.utils.observation_action_utils_sharpa import OBS_NAMES
+            from isaacgymenvs.utils.robot_info import get_obs_names
 
+            obs_names = get_obs_names(self.robot_asset_file)
             idxs = diff.argsort()
             for idx in idxs:
-                print(f"OBS_NAMES[{idx}] = {OBS_NAMES[idx]}")
+                print(f"OBS_NAMES[{idx}] = {obs_names[idx]}")
                 print(f"obs['obs'][{idx}] = {obs['obs'][0, idx]}")
                 print(f"new_obs[{idx}] = {new_obs[0, idx]}")
                 print(f"diff[{idx}] = {diff[idx]}")
@@ -229,22 +232,26 @@ def main():
     env_state = checkpoint[0]["env_state"]
     env.set_env_state(env_state)
 
+    robot_asset_file = env.cfg["env"]["asset"]["robot"]
+    num_observations = env.cfg["env"]["numObservations"]
+    num_actions = env.cfg["env"]["numActions"]
     policy = RlPlayer(
-        num_observations=N_OBS,
-        num_actions=N_ACT,
+        num_observations=num_observations,
+        num_actions=num_actions,
         config_path=args.config_path,
         checkpoint_path=args.checkpoint_path,
         device=DEVICE,
         num_envs=env.num_envs,
     )
 
-    urdf = create_urdf_object(robot_name="iiwa14_left_sharpa_adjusted_restricted")
+    urdf = create_urdf_object(robot_asset_file)
 
     isaac_env = IsaacEnvNoRos(
         env=env,
         control_dt=control_dt,
         device=DEVICE,
         urdf=urdf,
+        robot_asset_file=robot_asset_file,
     )
     observation = isaac_env.reset()
 

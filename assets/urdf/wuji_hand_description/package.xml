@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>wuji_hand_description</name>
+  <version>0.2.4</version>
+  <description>Robot model description package for Wuji Hand with URDF, MJCF, and USD assets for simulation and ROS2 visualization.</description>
+
+  <maintainer email="support@wuji.tech">Wuji Technology</maintainer>
+
+  <license>MIT</license>
+
+  <url type="website">https://wuji.tech</url>
+  <url type="bugtracker">https://github.com/wuji-technology/wuji-hand-description/issues</url>
+  <url type="repository">https://github.com/wuji-technology/wuji-hand-description</url>
+
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+
+  <exec_depend>urdf</exec_depend>
+
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>rviz_common</exec_depend>
+  <exec_depend>rviz_default_plugins</exec_depend>
+
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
