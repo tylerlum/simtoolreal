@@ -16,7 +16,7 @@ from isaacgymenvs.utils.observation_action_utils_sharpa import (
 )
 from isaacgymenvs.utils.utils import get_repo_root_dir
 
-HARDCODED_TRAJECTORY_PATH = Path.home() / "Downloads/brush_object_goal_poses_NEW.json"
+# HARDCODED_TRAJECTORY_PATH = Path.home() / "Downloads/brush_object_goal_poses_NEW.json"
 
 
 def info(message: str):
@@ -295,7 +295,7 @@ def main():
     args: GoalPoseNodeArgs = tyro.cli(GoalPoseNodeArgs)
 
     # Load trajectory
-    trajectory_path = HARDCODED_TRAJECTORY_PATH
+    # trajectory_path = HARDCODED_TRAJECTORY_PATH
     # trajectory_path = (
     #     get_repo_root_dir()
     #     / "dextoolbench/trajectories"
@@ -303,16 +303,16 @@ def main():
     #     / args.object_name
     #     / f"{args.task_name}.json"
     # )
-    assert trajectory_path.exists(), f"Trajectory file not found: {trajectory_path}"
-    with open(trajectory_path) as f:
-        traj_data = json.load(f)
+    # assert trajectory_path.exists(), f"Trajectory file not found: {trajectory_path}"
+    # with open(trajectory_path) as f:
+    #     traj_data = json.load(f)
 
-    # Account for robot to world frame
-    goal_poses_world_frame = traj_data["goals"]
-    goal_poses_robot_frame = [
-        [x, y - 0.8, z, qx, qy, qz, qw]
-        for x, y, z, qx, qy, qz, qw in goal_poses_world_frame
-    ]
+    # # Account for robot to world frame
+    # goal_poses_world_frame = traj_data["goals"]
+    # goal_poses_robot_frame = [
+    #     [x, y - 0.8, z, qx, qy, qz, qw]
+    #     for x, y, z, qx, qy, qz, qw in goal_poses_world_frame
+    # ]
 
     OVERWRITE = True
     if OVERWRITE:
@@ -391,9 +391,22 @@ def main():
         #     x: -0.08624174066673934
         #     y: -0.7693611909191991
         #     z: 0.6852802427130255
+        # insert_pose = np.array([
+        #     -0.08624,
+        #     -0.76936,
+        #     0.68528 - 0.0375,
+        #     0.0,
+        #     -0.707,
+        #     0.0,
+        #     0.707,
+        # ])
+
+        #     x: -0.08322641169514289
+        #     y: -0.7688177412617602
+        #     z: 0.6825694397159632
         insert_pose = np.array([
-            -0.08624,
-            -0.76936,
+            -0.08322,
+            -0.7688,
             0.68528 - 0.0375,
             0.0,
             -0.707,
