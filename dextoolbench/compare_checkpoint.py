@@ -16,6 +16,7 @@ import numpy as np
 
 from deployment.isaac.isaac_env import create_env
 from deployment.rl_player import RlPlayer
+from isaacgymenvs.utils.utils import set_seed
 
 
 N_ACT = 29
@@ -35,6 +36,7 @@ def main():
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    set_seed(args.seed, torch_deterministic=False)
     env = create_env(
         config_path=str(args.config_path),
         headless=True,
