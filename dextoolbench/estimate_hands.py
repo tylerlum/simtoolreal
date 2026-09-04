@@ -74,7 +74,7 @@ class Args:
     output_dir: Optional[Path] = None
     """Output directory. Defaults to DEMO_DIR/hand_pose_trajectory."""
 
-    hand_type: str = "RIGHT"
+    hand_type: str = "LEFT"
     """RIGHT or LEFT."""
 
     only_idx: Optional[int] = None

@@ -43,6 +43,7 @@ cd /home/tylerlum/github_repos/simtoolreal
 /home/tylerlum/github_repos/hamer_depth/.venv/bin/python \
   -m dextoolbench.estimate_hands \
   --demo-dir dextoolbench/data/hammer/claw_hammer/swing_down \
+  --hand-type LEFT \
   --ignore-exceptions
 ```
 
