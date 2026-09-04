@@ -303,8 +303,22 @@ def sim_worker(conn, category, object_name, task_name, table_urdf,
         joint_lower = env.arm_hand_dof_lower_limits[:n_act].cpu().numpy()
         joint_upper = env.arm_hand_dof_upper_limits[:n_act].cpu().numpy()
 
-        # Load policy
-        env.set_env_state(torch.load(checkpoint_path)[0]["env_state"])
+        # Full training checkpoints store resume-only state under integer key 0,
+        # while inference-only checkpoints may contain just {"model": ...}.
+        # Environment-state restoration is optional for evaluation because the
+        # deterministic eval settings above fully initialize a fresh environment.
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint_root = checkpoint.get(0, checkpoint)
+        env_state = checkpoint_root.get("env_state")
+        if env_state is not None:
+            # SimToolReal.set_env_state removes entries as it consumes them, so
+            # pass a shallow copy instead of mutating the loaded checkpoint.
+            env.set_env_state(env_state.copy())
+        else:
+            print(
+                "[worker] Checkpoint has no env_state; using fresh deterministic "
+                "evaluation environment state."
+            )
         policy = RlPlayer(140, n_act, config_path, checkpoint_path, device, env.num_envs)
 
         # Initial reset
