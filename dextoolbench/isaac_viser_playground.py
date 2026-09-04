@@ -252,8 +252,11 @@ def sim_worker(conn, config_path, checkpoint_path):
 
 
 class Playground:
-    def __init__(self, config_path, checkpoint_path, port):
+    def __init__(self, config_path, policies, port):
         self.port = port
+        self.config_path = str(config_path)
+        self.policies = policies
+        self.active_policy = next(iter(policies))
         self.server = viser.ViserServer(host="0.0.0.0", port=port)
         self._tmp = tempfile.TemporaryDirectory(prefix="simtoolreal_viser_")
         self.object_frame = None
@@ -262,19 +265,13 @@ class Playground:
         self.goal_vis = None
         self._paused = False
         self._stdin_state = None
+        self._pending_policy = None
+        self.conn = None
+        self.proc = None
 
         self._build_scene()
         self._build_gui()
-
-        ctx = multiprocessing.get_context("spawn")
-        self.conn, child = ctx.Pipe()
-        self.proc = ctx.Process(
-            target=sim_worker,
-            args=(child, str(config_path), str(checkpoint_path)),
-            daemon=True,
-        )
-        self.proc.start()
-        child.close()
+        self._start_worker(self.active_policy)
 
     def _build_scene(self):
         @self.server.on_client_connect
@@ -298,6 +295,14 @@ class Playground:
         self.server.gui.add_markdown(
             "# SimToolReal Playground\n"
             "Isaac Gym · pretrained policy · **deterministic=True**"
+        )
+        self.policy_dropdown = self.server.gui.add_dropdown(
+            "Policy checkpoint",
+            options=list(self.policies),
+            initial_value=self.active_policy,
+        )
+        self.policy_dropdown.on_update(
+            lambda _: setattr(self, "_pending_policy", self.policy_dropdown.value)
         )
         self.status = self.server.gui.add_markdown("**Status:** Loading Isaac Gym…")
         with self.server.gui.add_folder("Goal", expand_by_default=True):
@@ -344,10 +349,43 @@ class Playground:
         self.metrics = self.server.gui.add_markdown("**Reward:** --")
 
     def _send(self, msg):
+        if self.conn is None:
+            return
         try:
             self.conn.send(msg)
         except (BrokenPipeError, OSError):
             pass
+
+    def _stop_worker(self):
+        if self.conn is not None:
+            try:
+                self.conn.send(("quit",))
+            except (BrokenPipeError, OSError):
+                pass
+            self.conn.close()
+            self.conn = None
+        if self.proc is not None:
+            self.proc.join(timeout=5)
+            if self.proc.is_alive():
+                self.proc.kill()
+                self.proc.join()
+            self.proc = None
+
+    def _start_worker(self, label):
+        self._stop_worker()
+        self.active_policy = label
+        self._paused = False
+        self.robot.update_cfg(DEFAULT_DOF_POS)
+        self.status.content = "**Status:** Loading %s…" % label
+        ctx = multiprocessing.get_context("spawn")
+        self.conn, child = ctx.Pipe()
+        self.proc = ctx.Process(
+            target=sim_worker,
+            args=(child, self.config_path, str(self.policies[label])),
+            daemon=True,
+        )
+        self.proc.start()
+        child.close()
 
     def _toggle_pause(self):
         self._paused = not self._paused
@@ -355,6 +393,8 @@ class Playground:
         self._send(("pause",))
 
     def _install_object(self, urdf_text):
+        if self.object_frame is not None:
+            return
         path = Path(self._tmp.name) / "playground_hammer.urdf"
         path.write_text(urdf_text)
         self.object_frame = self.server.scene.add_frame("/object", show_axes=False)
@@ -377,10 +417,11 @@ class Playground:
         obj = state["object"][:3]
         goal = state["goal"][:3]
         self.metrics.content = (
-            "**Reward:** %.3f  \n**Time:** %.1fs  \n**Successes:** %d"
+            "**Policy:** %s  \n**Reward:** %.3f  \n**Time:** %.1fs  \n**Successes:** %d"
             "  \n**Object:** (%.3f, %.3f, %.3f)"
             "  \n**Goal:** (%.3f, %.3f, %.3f)"
-            % (state["reward"], state["step"] / CONTROL_HZ, state["successes"],
+            % (self.active_policy, state["reward"], state["step"] / CONTROL_HZ,
+               state["successes"],
                obj[0], obj[1], obj[2], goal[0], goal[1], goal[2])
         )
 
@@ -419,8 +460,13 @@ class Playground:
         self._enable_terminal_keys()
         try:
             while True:
+                if self._pending_policy is not None:
+                    label = self._pending_policy
+                    self._pending_policy = None
+                    if label != self.active_policy:
+                        self._start_worker(label)
                 self._poll_terminal()
-                while self.conn.poll(0):
+                while self.conn is not None and self.conn.poll(0):
                     msg = self.conn.recv()
                     if msg[0] == "ready":
                         self._install_object(msg[1])
@@ -430,21 +476,16 @@ class Playground:
                     elif msg[0] == "error":
                         self.status.content = "**Status:** Isaac error (see terminal)"
                         print(msg[1])
-                if not self.proc.is_alive() and not self.conn.poll(0):
-                    raise RuntimeError("Isaac worker exited")
+                if self.proc is not None and not self.proc.is_alive():
+                    self.status.content = "**Status:** Isaac worker exited (see terminal)"
                 time.sleep(1.0 / 120.0)
         except KeyboardInterrupt:
             pass
         finally:
             if self._stdin_state is not None:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._stdin_state)
-            try:
-                self._send(("quit",))
-                self.proc.join(timeout=5)
-                if self.proc.is_alive():
-                    self.proc.kill()
-            finally:
-                self._tmp.cleanup()
+            self._stop_worker()
+            self._tmp.cleanup()
 
 
 def main():
@@ -452,12 +493,28 @@ def main():
     parser.add_argument("--port", type=int, default=8085)
     parser.add_argument("--config-path", type=Path, default=Path("pretrained_policy/config.yaml"))
     parser.add_argument("--checkpoint-path", type=Path, default=Path("pretrained_policy/model.pth"))
+    parser.add_argument(
+        "--comparison-dir", type=Path,
+        default=Path("simtoolreal_eval_checkpoints_20260904"),
+        help="Directory containing eigenoise_01/02.pth and jabs_01/02.pth",
+    )
     args = parser.parse_args()
     if not args.config_path.exists():
         parser.error("config not found: %s" % args.config_path)
     if not args.checkpoint_path.exists():
         parser.error("checkpoint not found: %s" % args.checkpoint_path)
-    Playground(args.config_path, args.checkpoint_path, args.port).run()
+    policies = {"Pretrained": args.checkpoint_path}
+    comparison_names = [
+        ("Eigenoise 01", "eigenoise_01.pth"),
+        ("Eigenoise 02", "eigenoise_02.pth"),
+        ("Jabs 01", "jabs_01.pth"),
+        ("Jabs 02", "jabs_02.pth"),
+    ]
+    for label, filename in comparison_names:
+        path = args.comparison_dir / filename
+        if path.exists():
+            policies[label] = path
+    Playground(args.config_path, policies, args.port).run()
 
 
 if __name__ == "__main__":
