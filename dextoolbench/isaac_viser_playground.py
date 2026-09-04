@@ -13,6 +13,7 @@ desktop hotkeys are also available in the terminal that launched this script:
   W/A/S/D       teleport object on the table
   Backspace     reset scene
   Space         pause/resume
+  1..5          switch checkpoint (pretrained, Eigenoise 01/02, Jabs 01/02)
 
 Isaac Gym is isolated in a subprocess so the Viser process stays lightweight.
 """
@@ -435,6 +436,13 @@ class Playground:
         if self._stdin_state is None or not select.select([sys.stdin], [], [], 0)[0]:
             return
         key = os.read(sys.stdin.fileno(), 3)
+        if len(key) == 1 and key in b"12345":
+            index = int(key) - 1
+            labels = list(self.policies)
+            if index < len(labels):
+                self.policy_dropdown.value = labels[index]
+                self._pending_policy = labels[index]
+            return
         mapping = {
             b"r": ("random_goal",), b"R": ("random_goal",),
             b"[": ("nudge_goal", [0, -GOAL_STEP, 0]),
