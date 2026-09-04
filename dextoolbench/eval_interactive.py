@@ -29,6 +29,18 @@ from viser.extras import ViserUrdf
 
 from dextoolbench.metadata import DEXTOOLBENCH_DATA_STRUCTURE, OBJECT_NAME_TO_CATEGORY
 
+# Viser 1.0.26's HTTP server uses pathlib.Path.is_relative_to(), which was
+# added in Python 3.9. Isaac Gym Preview 4 still runs in our Python 3.8 env.
+if not hasattr(Path, "is_relative_to"):
+    def _path_is_relative_to(self, other):
+        try:
+            self.relative_to(other)
+            return True
+        except ValueError:
+            return False
+
+    Path.is_relative_to = _path_is_relative_to
+
 # Pre-load the sidebar overview image as a numpy array (once, at import time)
 _SIDEBAR_IMG_PATH = Path(__file__).resolve().parent.parent / "assets" / "urdf" / "dextoolbench" / "dextoolbench_objects_sidebar.png"
 _SIDEBAR_IMG = None
