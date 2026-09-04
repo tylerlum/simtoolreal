@@ -246,8 +246,13 @@ def sim_worker(conn, config_path, checkpoint_path):
             delay = control_dt - (time.time() - tick)
             if delay > 0:
                 time.sleep(delay)
+    except (BrokenPipeError, EOFError):
+        return
     except Exception as exc:
-        conn.send(("error", "%s\n%s" % (exc, traceback.format_exc())))
+        try:
+            conn.send(("error", "%s\n%s" % (exc, traceback.format_exc())))
+        except (BrokenPipeError, EOFError):
+            pass
     finally:
         conn.close()
 
@@ -269,6 +274,11 @@ class Playground:
         self._pending_policy = None
         self.conn = None
         self.proc = None
+        self.policy_stats = {
+            label: {"attempts": 0, "times": []} for label in policies
+        }
+        self._attempt_started_at = None
+        self._attempt_hit = False
 
         self._build_scene()
         self._build_gui()
@@ -348,10 +358,13 @@ class Playground:
                 lambda _: self._send(("reset",))
             )
         self.metrics = self.server.gui.add_markdown("**Reward:** --")
+        self.scoreboard = self.server.gui.add_markdown("**Comparison:** No attempts yet")
 
     def _send(self, msg):
         if self.conn is None:
             return
+        if msg[0] in ("random_goal", "reset"):
+            self._start_attempt()
         try:
             self.conn.send(msg)
         except (BrokenPipeError, OSError):
@@ -363,14 +376,15 @@ class Playground:
                 self.conn.send(("quit",))
             except (BrokenPipeError, OSError):
                 pass
-            self.conn.close()
-            self.conn = None
         if self.proc is not None:
             self.proc.join(timeout=5)
             if self.proc.is_alive():
                 self.proc.kill()
                 self.proc.join()
             self.proc = None
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def _start_worker(self, label):
         self._stop_worker()
@@ -387,6 +401,24 @@ class Playground:
         )
         self.proc.start()
         child.close()
+
+    def _start_attempt(self):
+        self.policy_stats[self.active_policy]["attempts"] += 1
+        self._attempt_started_at = time.time()
+        self._attempt_hit = False
+        self._render_scoreboard()
+
+    def _render_scoreboard(self):
+        lines = ["**Comparison (goal hits / attempts):**"]
+        for label, stats in self.policy_stats.items():
+            times = stats["times"]
+            timing = ""
+            if times:
+                timing = " · mean %.1fs" % float(np.mean(times))
+            lines.append("- %s: %d / %d%s" % (
+                label, len(times), stats["attempts"], timing
+            ))
+        self.scoreboard.content = "\n".join(lines)
 
     def _toggle_pause(self):
         self._paused = not self._paused
@@ -425,6 +457,16 @@ class Playground:
                state["successes"],
                obj[0], obj[1], obj[2], goal[0], goal[1], goal[2])
         )
+        if (
+            state["successes"] > 0
+            and not self._attempt_hit
+            and self._attempt_started_at is not None
+        ):
+            self.policy_stats[self.active_policy]["times"].append(
+                time.time() - self._attempt_started_at
+            )
+            self._attempt_hit = True
+            self._render_scoreboard()
 
     def _enable_terminal_keys(self):
         if not sys.stdin.isatty():
@@ -478,6 +520,7 @@ class Playground:
                     msg = self.conn.recv()
                     if msg[0] == "ready":
                         self._install_object(msg[1])
+                        self._start_attempt()
                         self._update(msg[2])
                     elif msg[0] == "state":
                         self._update(msg[1])
