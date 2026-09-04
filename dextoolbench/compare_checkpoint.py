@@ -84,12 +84,17 @@ def main():
         },
     )
 
+    # Reset and sample goals before constructing the policy. Model construction
+    # consumes a checkpoint-dependent amount of RNG, so reversing this order
+    # silently gives different goal poses to differently packaged checkpoints.
+    obs_dict, _, _, _ = env.step(torch.zeros((args.num_envs, N_ACT), device=device))
+    obs = obs_dict["obs"]
+    initial_goals = env.goal_pose[:, :7].detach().cpu().numpy().copy()
+
     policy = RlPlayer(
         N_OBS, N_ACT, args.config_path, args.checkpoint_path, device, args.num_envs
     )
     policy.reset()
-    obs_dict, _, _, _ = env.step(torch.zeros((args.num_envs, N_ACT), device=device))
-    obs = obs_dict["obs"]
 
     active = torch.ones(args.num_envs, dtype=torch.bool, device=device)
     hit = torch.zeros_like(active)
@@ -97,7 +102,6 @@ def main():
         (args.num_envs,), args.num_steps, dtype=torch.long, device=device
     )
     returns = torch.zeros(args.num_envs, device=device)
-    initial_goals = env.goal_pose[:, :7].detach().cpu().numpy().copy()
 
     for step in range(1, args.num_steps + 1):
         action = policy.get_normalized_action(obs, deterministic_actions=True)
