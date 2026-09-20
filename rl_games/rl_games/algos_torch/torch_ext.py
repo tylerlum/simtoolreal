@@ -71,10 +71,12 @@ def safe_filesystem_op(func, *args, **kwargs):
     raise RuntimeError(f'Could not execute {func}, give up after {num_attempts} attempts...')
 
 def safe_symlink(src, dst):
-    try:
-        safe_filesystem_op(os.remove, dst)
-    except (FileExistsError, RuntimeError):
-        pass
+    def remove_if_present():
+        try:
+            os.remove(dst)
+        except FileNotFoundError:
+            pass
+    safe_filesystem_op(remove_if_present)
     safe_filesystem_op(os.symlink, src, dst)
 
 def safe_save(state, filename):
