@@ -113,6 +113,10 @@ class SimToolReal(VecTask):
         self.robot_asset_file: str = self.cfg["env"]["asset"]["robot"]
 
         self.clamp_abs_observations: float = self.cfg["env"]["clampAbsObservations"]
+        self.contact_reward_config = self.cfg["env"].get("fingertipContactReward", {"enabled": False})
+        self.contact_reward_enabled = self.contact_reward_config["enabled"]
+        if self.contact_reward_enabled and self.cfg["sim"]["physx"]["contact_collection"] != 2:
+            raise ValueError("Fingertip contact reward requires contact_collection=2")
 
         self.privileged_actions = self.cfg["env"]["privilegedActions"]
         self.privileged_actions_torque = self.cfg["env"]["privilegedActionsTorque"]
@@ -692,6 +696,20 @@ class SimToolReal(VecTask):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in reward_keys
         }
+        if self.contact_reward_enabled:
+            from .contact_reward import FingertipContactReward
+            asset_root = Path(__file__).resolve().parents[3] / "assets"
+            self.contact_reward_fn = FingertipContactReward(
+                pool=self.object_pool_parameters, num_envs=self.num_envs,
+                fingertip_names=self.fingertips,
+                robot_urdf=asset_root / self.robot_asset_file,
+                table_urdf=asset_root / self.cfg["env"]["asset"]["table"],
+                config=self.contact_reward_config, step_dt=self.control_dt, device=self.device,
+            )
+            self.net_contact_forces = gymtorch.wrap_tensor(
+                self.gym.acquire_net_contact_force_tensor(self.sim)
+            ).view(self.num_envs, -1, 3)
+            self.rewards_episode["fingertip_contact_rew"] = torch.zeros_like(self.rew_buf)
 
         self.last_curriculum_update = 0
 
@@ -2660,6 +2678,17 @@ class SimToolReal(VecTask):
             + object_lin_vel_penalty
             + object_ang_vel_penalty
         )
+        if self.contact_reward_enabled:
+            contact_reward, contact_quality = self.contact_reward_fn(
+                self.net_contact_forces[:, self.fingertip_handles],
+                self.fingertip_rot, self.fingertip_pos_offset,
+                self.object_pos, self.object_rot,
+                self.root_state_tensor[self.table_indices, :3],
+            )
+            reward += contact_reward
+            self.rewards_episode["fingertip_contact_rew"] += contact_reward
+            self.extras["fingertip_contact_reward"] = contact_reward
+            self.extras["fingertip_contact_quality"] = contact_quality
 
         self.rew_buf[:] = reward
 
@@ -2812,6 +2841,8 @@ class SimToolReal(VecTask):
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
+        if self.contact_reward_enabled:
+            self.gym.refresh_net_contact_force_tensor(self.sim)
 
         if self.with_fingertip_force_sensors or self.with_table_force_sensor:
             self.gym.refresh_force_sensor_tensor(self.sim)
