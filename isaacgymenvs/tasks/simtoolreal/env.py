@@ -1656,6 +1656,9 @@ class SimToolReal(VecTask):
         # There is no relative rotation between the handle and head
 
         NUM_OBJECTS_PER_TYPE = self.cfg["env"].get("numAssetsPerType", 100)
+        head_density_mode = self.cfg["env"].get("headDensityMode", "sampled")
+        if head_density_mode not in ("sampled", "match_handle"):
+            raise ValueError(f"Unknown headDensityMode: {head_density_mode}")
         np.random.seed(42)
 
         from isaacgymenvs.tasks.simtoolreal.generate_objects import (
@@ -1672,6 +1675,7 @@ class SimToolReal(VecTask):
 
         files_list = []
         scales_list = []
+        self.object_pool_parameters = []
         for object_size_distribution in object_size_distributions:
             handle_head_type = object_size_distribution.type
 
@@ -1682,6 +1686,10 @@ class SimToolReal(VecTask):
             head_densities = object_size_distribution.sample_head_densities(
                 NUM_OBJECTS_PER_TYPE
             )
+            # Consume the same random draws in both arms, preserving geometry,
+            # handle density, pool ordering, and the subsequent RNG stream.
+            if head_density_mode == "match_handle" and head_densities is not None:
+                head_densities = handle_densities.copy()
 
             # Sample scales
             # Currently different for each object
@@ -1690,6 +1698,13 @@ class SimToolReal(VecTask):
             )
             head_scales = object_size_distribution.sample_head_scales(
                 NUM_OBJECTS_PER_TYPE
+            )
+            self.object_pool_parameters.extend(
+                dict(type=handle_head_type, handle_scale=handle_scales[i].tolist(),
+                     head_scale=head_scales[i].tolist() if head_scales is not None else None,
+                     handle_density=float(handle_densities[i]),
+                     head_density=float(head_densities[i]) if head_densities is not None else None)
+                for i in range(NUM_OBJECTS_PER_TYPE)
             )
             assert handle_scales.shape in [
                 (NUM_OBJECTS_PER_TYPE, 2),
@@ -1755,6 +1770,7 @@ class SimToolReal(VecTask):
             all_files = [all_files[i] for i in indices]
             all_scales = [all_scales[i] for i in indices]
             need_vhacds = [need_vhacds[i] for i in indices]
+            self.object_pool_parameters = [self.object_pool_parameters[i] for i in indices]
 
         DEBUG_PRINT = False
         if DEBUG_PRINT:
@@ -3059,7 +3075,7 @@ class SimToolReal(VecTask):
             self.arm_hand_dof_pos[:, :num_dofs],
             self.arm_hand_dof_lower_limits[:num_dofs],
             self.arm_hand_dof_upper_limits[:num_dofs],
-        )
+        ).clamp(-1.0, 1.0)
         # dof velocities
         obs_dict["joint_vel"] = self.arm_hand_dof_vel[:, :num_dofs]
         # prev action targets
@@ -3878,6 +3894,13 @@ class SimToolReal(VecTask):
         if self._DO_NOT_MOVE:
             self.cur_targets[:, :] = self.prev_targets[:, :]
 
+        # Final physical bound, including noisy actions and externally supplied
+        # targets. Store exactly the bounded command as the observed EMA state.
+        self.cur_targets[:, : self.num_hand_arm_dofs] = tensor_clamp(
+            self.cur_targets[:, : self.num_hand_arm_dofs],
+            self.arm_hand_dof_lower_limits,
+            self.arm_hand_dof_upper_limits,
+        )
         self.prev_targets[:, :] = self.cur_targets[:, :]
 
         if self.VISUALIZE_PD_TARGET_AS_BLUE_ROBOT:

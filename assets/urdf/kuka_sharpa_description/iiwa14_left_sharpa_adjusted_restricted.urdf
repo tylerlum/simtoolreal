@@ -368,7 +368,7 @@
     <child link="left_thumb_MC"/>
     <axis xyz="0 0 1"/>
     <!-- <limit lower="-0.3491" upper="0.3491" effort="3.3" velocity="11.84076833" /> -->
-    <limit lower="-0.3491" upper="0.3491" effort="3.3" velocity="11.84076833"/>
+    <limit lower="-0.3491" upper="0.1309" effort="3.3" velocity="11.84076833"/>
   </joint>
   <link name="left_thumb_MCP_VL">
     <inertial>
@@ -549,7 +549,7 @@
     <child link="left_index_PP"/>
     <axis xyz="0 0 1"/>
     <!-- <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878" /> -->
-    <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878"/>
+    <limit lower="-0.03491" upper="0.03491" effort="1.864" velocity="16.07692878"/>
   </joint>
   <link name="left_index_MP">
     <inertial>
@@ -707,7 +707,7 @@
     <child link="left_middle_PP"/>
     <axis xyz="0 0 1"/>
     <!-- <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878" /> -->
-    <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878"/>
+    <limit lower="-0.03491" upper="0.03491" effort="1.864" velocity="16.07692878"/>
   </joint>
   <link name="left_middle_MP">
     <inertial>
@@ -865,7 +865,7 @@
     <child link="left_ring_PP"/>
     <axis xyz="0 0 1"/>
     <!-- <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878" /> -->
-    <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878"/>
+    <limit lower="-0.03491" upper="0.03491" effort="1.864" velocity="16.07692878"/>
   </joint>
   <link name="left_ring_MP">
     <inertial>
@@ -1052,7 +1052,7 @@
     <child link="left_pinky_PP"/>
     <axis xyz="0 0 1"/>
     <!-- <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878" /> -->
-    <limit lower="-0.3491" upper="0.3491" effort="1.864" velocity="16.07692878"/>
+    <limit lower="-0.03491" upper="0.03491" effort="1.864" velocity="16.07692878"/>
   </joint>
   <link name="left_pinky_MP">
     <inertial>
