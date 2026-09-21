@@ -27,11 +27,15 @@ class PPODataset(Dataset):
         if values_dict is not None and 'returns' in values_dict:
             self.length =  len(values_dict['returns']) // self.minibatch_size    
 
-    def update_mu_sigma(self, mu, sigma):	    
+    def update_mu_sigma(self, mu, sigma, eigen_sigma=None):
         start = self.last_range[0]	           
         end = self.last_range[1]	
         self.values_dict['mu'][start:end] = mu	
         self.values_dict['sigma'][start:end] = sigma 
+        if 'eigen_sigma' in self.values_dict:
+            if eigen_sigma is None:
+                raise ValueError('eigen policy KL requires the matching eigen scales')
+            self.values_dict['eigen_sigma'][start:end] = eigen_sigma
 
     def __len__(self):
         return self.length

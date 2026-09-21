@@ -153,6 +153,9 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             entropy = res_dict['entropy']
             mu = res_dict['mus']
             sigma = res_dict['sigmas']
+            eigen_sigma = res_dict.get('eigen_sigmas')
+            if eigen_sigma is not None:
+                eigen_sigma = eigen_sigma.detach()
 
             a_loss = self.actor_loss_func(old_action_log_probs_batch, action_log_probs, advantage, self.ppo, curr_e_clip)
 
@@ -201,7 +204,13 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
 
         with torch.no_grad():
             reduce_kl = rnn_masks is None
-            kl_dist = torch_ext.policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
+            if eigen_sigma is not None:
+                kl_dist = torch_ext.policy_kl_eigadd(
+                    mu.detach(), sigma.detach(), eigen_sigma,
+                    old_mu_batch, old_sigma_batch, input_dict['eigen_sigma'],
+                    self.model.a2c_network.noise_eigadd_basis, reduce_kl)
+            else:
+                kl_dist = torch_ext.policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
             if rnn_masks is not None:
                 kl_dist = (kl_dist * rnn_masks).sum() / rnn_masks.numel()  #/ sum_mask
 
@@ -242,7 +251,7 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             extras["entropies"] = [torch.nan_to_num(entropy[bl_idxs == i].detach().mean()).item() for i in range(self.num_actors // self.intr_coef_block_size)]
         self.train_result = (a_loss, c_loss, torch_ext.apply_masks([entropy.unsqueeze(1)], rnn_masks)[0][0], \
             kl_dist, self.last_lr, lr_mul, \
-            mu.detach(), sigma.detach(), b_loss, extras)
+            mu.detach(), sigma.detach(), eigen_sigma, b_loss, extras)
 
     def train_actor_critic(self, input_dict):
         self.calc_gradients(input_dict)

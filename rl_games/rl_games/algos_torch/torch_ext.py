@@ -26,6 +26,55 @@ numpy_to_torch_dtype_dict = {
 
 torch_to_numpy_dtype_dict = {value : key for (key, value) in numpy_to_torch_dtype_dict.items()}
 
+def policy_kl_eigadd(p0_mu, p0_sigma, p0_eigen_sigma,
+                     p1_mu, p1_sigma, p1_eigen_sigma, basis, reduce=True):
+    """Exact KL(p0 || p1) for diag(sigma**2) + B.T @ diag(eigen_sigma**2) @ B.
+
+    The basis is fixed; both IID and eigen scales can differ per sample.
+    Use K-dimensional capacitance matrices rather than dense action-space
+    inverses. Keep the pre-update eigen scales with the old mean and sigma.
+    """
+    # AMP may produce half-precision means. KL is a scheduler statistic;
+    # evaluate its solves and covariance differences in at least float32.
+    dtype = torch.promote_types(p0_mu.dtype, p0_sigma.dtype)
+    if dtype in (torch.float16, torch.bfloat16):
+        dtype = torch.float32
+    with torch.autocast(device_type=p0_mu.device.type, enabled=False):
+        mu0, std0, s0, mu1, std1, s1, B = [
+            t.to(dtype=dtype) for t in
+            (p0_mu, p0_sigma, p0_eigen_sigma,
+             p1_mu, p1_sigma, p1_eigen_sigma, basis)]
+        var0, var1 = std0.square(), std1.square()
+        invvar1 = var1.reciprocal()
+        gram0 = (B * var0.reciprocal().unsqueeze(-2)) @ B.t()
+        weighted_basis = B * invvar1.unsqueeze(-2)
+        gram1 = weighted_basis @ B.t()
+        eye = torch.eye(B.shape[0], device=B.device, dtype=dtype)
+        chol0 = torch.linalg.cholesky(
+            eye + s0.unsqueeze(-1) * gram0 * s0.unsqueeze(-2))
+        chol1 = torch.linalg.cholesky(
+            eye + s1.unsqueeze(-1) * gram1 * s1.unsqueeze(-2))
+        A = s1.unsqueeze(-1) * weighted_basis
+        solved = torch.cholesky_solve(A, chol1)
+        # Diagonals of Sigma1^-1 and B Sigma1^-1 B.T via Woodbury.
+        precision_diag = invvar1 - (A * solved).sum(dim=-2)
+        basis_precision_diag = torch.diagonal(gram1, dim1=-2, dim2=-1) - (
+            (s1.unsqueeze(-1) * gram1) * (solved @ B.t())).sum(dim=-2)
+        # tr(Sigma1^-1 (Sigma0 - Sigma1)) avoids subtracting n near KL=0.
+        trace_delta = ((var0 - var1) * precision_diag).sum(dim=-1)
+        trace_delta += ((s0.square() - s1.square()) * basis_precision_diag).sum(dim=-1)
+        delta = mu1 - mu0
+        projected = (A @ delta.unsqueeze(-1)).squeeze(-1)
+        quadratic = (delta.square() * invvar1).sum(dim=-1) - (
+            projected * (solved @ delta.unsqueeze(-1)).squeeze(-1)).sum(dim=-1)
+        logdet_delta = 2.0 * (
+            (std1.log() - std0.log()).sum(dim=-1)
+            + (torch.diagonal(chol1, dim1=-2, dim2=-1).log()
+               - torch.diagonal(chol0, dim1=-2, dim2=-1).log()).sum(dim=-1))
+        kl = (0.5 * (trace_delta + quadratic + logdet_delta)).clamp_min(0.0)
+        return kl.mean() if reduce else kl
+
+
 def policy_kl(p0_mu, p0_sigma, p1_mu, p1_sigma, reduce=True):
     c1 = torch.log(p1_sigma/p0_sigma + 1e-5)
     c2 = (p0_sigma**2 + (p1_mu - p0_mu)**2)/(2.0 * (p1_sigma**2 + 1e-5))

@@ -1,4 +1,4 @@
-"""Launch the four resolved runs in persistent tmux sessions on idle GPUs."""
+"""Launch the selected resolved runs in persistent tmux sessions on idle GPUs."""
 import argparse
 import csv
 import json
@@ -19,8 +19,8 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Show commands and occupancy without starting jobs')
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
-    if len(manifest) != 4 or len({m['gpu'] for m in manifest}) != 4:
-        parser.error('Expected exactly four runs on four distinct GPUs')
+    if not manifest or len({m['gpu'] for m in manifest}) != len(manifest):
+        parser.error('Expected at least one run and one distinct GPU per run')
     gpus = {int(r[0].strip()): r[1].strip() for r in csv.reader(subprocess.check_output(
         ['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader'], text=True).splitlines())}
     occupied = {r[0].strip() for r in csv.reader(subprocess.check_output(

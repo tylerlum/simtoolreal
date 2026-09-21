@@ -333,7 +333,7 @@ task:
       contact_collection: 0
 train:
   params:
-    seed: 13
+    seed: 43
     algo:
       name: a2c_continuous
     model:
@@ -373,7 +373,7 @@ train:
     load_checkpoint: false
     load_path: ''
     config:
-      name: 0_gym_eigendexplore_scratch_s13
+      name: 0_gym_eigendexplore_scratch_bal_s43
       device_name: cuda:0
       env_name: rlgpu
       multi_gpu: false
@@ -448,14 +448,14 @@ train:
       expl_reward_coef: 0.0
       value_bootstrap: false
       device: cuda:0
-      full_experiment_name: 0_gym_eigendexplore_scratch_s13
-      train_dir: ${oc.env:STR_RUN_ROOT}/eigendexplore_scratch
+      full_experiment_name: 0_gym_eigendexplore_scratch_bal_s43
+      train_dir: ${oc.env:STR_RUN_ROOT}/eigendexplore_scratch_bal
 pbt:
   enabled: false
 task_name: SimToolReal
-experiment: 0_gym_eigendexplore_scratch_s13
+experiment: 0_gym_eigendexplore_scratch_bal_s43
 num_envs: 24576
-seed: 13
+seed: 43
 torch_deterministic: false
 max_iterations: ''
 physics_engine: physx
@@ -473,7 +473,7 @@ sigma: ''
 multi_gpu: false
 wandb_activate: true
 wandb_group: ${oc.env:STR_WANDB_GROUP}
-wandb_name: 0_gym_eigendexplore_scratch_s13
+wandb_name: 0_gym_eigendexplore_scratch_bal_s43
 wandb_entity: ${oc.env:STR_WANDB_ENTITY}
 wandb_project: ${oc.env:STR_WANDB_PROJECT,action-bench-simtoolreal}
 wandb_tags: []
@@ -486,15 +486,17 @@ headless: true
 checkpoint_load_mode: weights
 wandb_notes: IsaacGym release-derived recipe; expanded limits; calibrated Gym physics;
   independent new lineage.
-full_experiment_name: 0_gym_eigendexplore_scratch_s13
+full_experiment_name: 0_gym_eigendexplore_scratch_bal_s43
 campaign:
-  key: eigendexplore_scratch
+  noise_variant: bal
+  spectrum_power: 1.0
+  key: eigendexplore_scratch_bal
   gpu: 3
-  run_dir: ${oc.env:STR_RUN_ROOT}/eigendexplore_scratch
+  run_dir: ${oc.env:STR_RUN_ROOT}/eigendexplore_scratch_bal
   wandb_id: ${oc.env:STR_WANDB_ID}
   parent_checkpoint: null
   parent_frame: 0
-  host_commit: fddff7462bfb683becb8aa0d73d496dca6065af4
+  host_commit: 9b5c54e823ffd0362c8b3992299ae867e2854c3d
   expanded_limits: true
   stopping: until_user_stops
   start_lr_source: released_config

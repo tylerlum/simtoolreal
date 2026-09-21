@@ -444,7 +444,8 @@ class A2CBase(BaseAlgorithm):
             if _ls is not None:
                 with torch.no_grad():
                     _s = torch.exp(_ls.detach())
-                    _sv = _s.cpu().tolist()
+                    _rows = _s.reshape(-1, _s.shape[-1])
+                    _sv = _rows.mean(dim=0).cpu().tolist()
                     for _n, _si in zip(_add_names, _sv):
                         self.writer.add_scalar(
                             f'info/noise_eigadd_sigma/{_n}', _si, frame)
@@ -454,7 +455,7 @@ class A2CBase(BaseAlgorithm):
                         # decoded eigen-noise RMS over the n action channels:
                         # diag(B^T S^2 B)_j = sum_k s_k^2 B[k, j]^2
                         _B = _net.noise_eigadd_basis
-                        _diag = ((_s ** 2).unsqueeze(-1) * _B ** 2).sum(dim=0)
+                        _diag = _rows.square() @ _B.square()
                         _eig_rms = float(torch.sqrt(_diag.mean()))
                         _jsig = torch.exp(_sig.detach()).flatten()
                         _joint_rms = float(torch.sqrt((_jsig ** 2).mean()))
@@ -465,6 +466,19 @@ class A2CBase(BaseAlgorithm):
                         self.writer.add_scalar(
                             'info/noise_eigadd_eigen_joint_ratio',
                             _eig_rms / _joint_rms, frame)
+                        if _ls.dim() == 2:
+                            # Logging-only CPU copies; rollout remains batched.
+                            _er = _diag.mean(dim=-1).sqrt().cpu().tolist()
+                            _jr = _sig.detach().exp().square().mean(
+                                dim=-1).sqrt().cpu().tolist()
+                            for _i, (_e, _j) in enumerate(zip(_er, _jr)):
+                                self.writer.add_scalar(
+                                    f'info/noise_eigadd_eigen_rms/block_{_i}', _e, frame)
+                                self.writer.add_scalar(
+                                    f'info/noise_eigadd_joint_rms/block_{_i}', _j, frame)
+                                self.writer.add_scalar(
+                                    f'info/noise_eigadd_eigen_joint_ratio/block_{_i}',
+                                    _e / _j, frame)
         _corr_logit = getattr(getattr(self.model, 'a2c_network', None), 'noise_corr_logit', None)
         if _corr_logit is not None:
             _w = torch.sigmoid(_corr_logit.detach()).cpu()
@@ -1581,6 +1595,12 @@ class ContinuousA2CBase(A2CBase):
     def init_tensors(self):
         A2CBase.init_tensors(self)
         self.update_list = ['actions', 'neglogpacs', 'values', 'mus', 'sigmas']
+        eigen_logsig = getattr(self.model.a2c_network, 'noise_eigadd_logsig', None)
+        if eigen_logsig is not None:
+            sigmas = self.experience_buffer.tensor_dict['sigmas']
+            self.experience_buffer.tensor_dict['eigen_sigmas'] = sigmas.new_zeros(
+                (*sigmas.shape[:-1], eigen_logsig.shape[-1]))
+            self.update_list.append('eigen_sigmas')
         self.tensor_list = self.update_list + ['obses', 'states', 'dones']
 
     def train_epoch(self):
@@ -1657,7 +1677,7 @@ class ContinuousA2CBase(A2CBase):
         for mini_ep in range(0, self.mini_epochs_num):
             ep_kls = []
             for i in range(len(self.dataset)):
-                a_loss, c_loss, entropy, kl, last_lr, lr_mul, cmu, csigma, b_loss, extras = self.train_actor_critic(self.dataset[i])
+                a_loss, c_loss, entropy, kl, last_lr, lr_mul, cmu, csigma, ceigen_sigma, b_loss, extras = self.train_actor_critic(self.dataset[i])
                 extra_infos['on_policy_contrib'].append(extras['on_policy_contrib'])
                 extra_infos['on_policy_grads'].append(extras['on_policy_grads'])
                 extra_infos['off_policy_contrib'].append(extras['off_policy_contrib'])
@@ -1671,7 +1691,7 @@ class ContinuousA2CBase(A2CBase):
                 if self.bounds_loss_coef is not None:
                     b_losses.append(b_loss)
 
-                self.dataset.update_mu_sigma(cmu, csigma)
+                self.dataset.update_mu_sigma(cmu, csigma, ceigen_sigma)
                 if self.schedule_type == 'legacy':
                     av_kls = kl
                     if self.multi_gpu:
@@ -1757,6 +1777,8 @@ class ContinuousA2CBase(A2CBase):
         dataset_dict['rnn_masks'] = rnn_masks
         dataset_dict['mu'] = mus
         dataset_dict['sigma'] = sigmas
+        if 'eigen_sigmas' in batch_dict:
+            dataset_dict['eigen_sigma'] = batch_dict['eigen_sigmas']
         dataset_dict['off_policy_mask'] = batch_dict.get('off_policy_mask', None)
 
         self.dataset.update_values_dict(dataset_dict)

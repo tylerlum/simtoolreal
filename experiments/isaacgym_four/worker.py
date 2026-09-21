@@ -135,11 +135,17 @@ class Observer(RLGPUAlgoObserver):
         if not smoke:assert algo.max_epochs==-1 and algo.max_frames==-1 and 'score_to_win' not in algo.config
         expected_eigen='eigendexplore' in cfg.campaign.key
         assert hasattr(algo.model.a2c_network,'noise_eigadd_basis')==expected_eigen
+        eigen_shape=None
+        if expected_eigen:
+            net=algo.model.a2c_network
+            eigen_shape=list(net.noise_eigadd_logsig.shape)
+            assert eigen_shape==[6,net.noise_eigadd_basis.shape[0]],eigen_shape
         info={'joint_names':names,'joint_friction':props['friction'].tolist(),
               'joint_lower':props['lower'].tolist(),'joint_upper':props['upper'].tolist(),
               'obs_dim':env.num_obs,'state_dim':env.num_states,'action_dim':env.num_actions,
               'num_envs':env.num_envs,'sapg_blocks':6,'success_tolerance':float(env.success_tolerance),
               'expl_reward_coef_scale':float(algo.config['expl_reward_coef_scale']),
+              'eigen_sigma_shape':eigen_shape,
               'max_epochs':algo.max_epochs,'max_frames':algo.max_frames,'smoke':smoke}
         (run_dir/'startup_contract.json').write_text(json.dumps(info,indent=2)+'\n')
         print('[campaign] STARTUP CONTRACT PASS',json.dumps(info),flush=True)

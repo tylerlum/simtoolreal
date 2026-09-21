@@ -486,10 +486,15 @@ class A2CBuilder(NetworkBuilder):
                         with torch.no_grad():
                             self.sigma.add_(torch.tensor(
                                 0.5 * _np.log(_jg), dtype=self.sigma.dtype))
-                        self.noise_eigadd_logsig = nn.Parameter(
-                            torch.tensor(_s0 + 0.5 * _np.log(_eg),
-                                         dtype=torch.float32),
-                            requires_grad=True)
+                        eigen_logsig = torch.tensor(
+                            _s0 + 0.5 * _np.log(_eg), dtype=torch.float32)
+                        if self.fixed_sigma == 'coef_cond':
+                            # Match IID exploration: each SAPG group owns its
+                            # eigen scales, so follower entropy cannot change
+                            # the leader's covariance directly.
+                            eigen_logsig = eigen_logsig.expand(
+                                len(self.sigma_ids), -1).clone()
+                        self.noise_eigadd_logsig = nn.Parameter(eigen_logsig)
                         print('[action-bench] additive eigen exploration '
                               'active (%d iid joint dims + %d eigen dims, '
                               'no tail lever)' % (actions_num, _k))

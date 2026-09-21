@@ -1,5 +1,17 @@
 # SimToolReal: An Object-Centric Policy for Zero-Shot Dexterous Tool Manipulation
 
+## Exploration defaults
+
+Use balanced EigenDExplore for new runs and SAPG
+`expl_reward_coef_scale: 0.002` for both JABS and eigennoise. Balanced uses
+hand IID sigma and decoded eigen RMS `sqrt(0.5)`, spectrum power `1.0`.
+Keep the exact covariance KL and independent per-SAPG-group eigen scales.
+Hot is an explicit ablation; existing checkpoint noise is retained on resume.
+The Action-Bench benchmark arm is `str_joint_abs_eignoise_espp_bal`.
+
+The native Gym default pair is documented in [the launcher guide](experiments/isaacgym_four/README.md).
+
+
 [Project Page](https://simtoolreal.github.io/)
 
 https://github.com/user-attachments/assets/e2d0db98-2e31-46aa-9480-c4c6f4a48f7d

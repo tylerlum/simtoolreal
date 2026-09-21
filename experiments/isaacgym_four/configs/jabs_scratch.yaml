@@ -333,7 +333,7 @@ task:
       contact_collection: 0
 train:
   params:
-    seed: 13
+    seed: 43
     algo:
       name: a2c_continuous
     model:
@@ -372,7 +372,7 @@ train:
     load_checkpoint: false
     load_path: ''
     config:
-      name: 0_gym_jabs_scratch_s13
+      name: 0_gym_jabs_scratch_s43
       device_name: cuda:0
       env_name: rlgpu
       multi_gpu: false
@@ -414,7 +414,7 @@ train:
       off_policy_ratio: 1.0
       expl_type: mixed_expl_learn_param
       expl_reward_coef_embd_size: 32
-      expl_reward_coef_scale: 0.005
+      expl_reward_coef_scale: 0.002
       expl_reward_type: entropy
       expl_coef_block_size: 4096
       player:
@@ -447,14 +447,14 @@ train:
       expl_reward_coef: 0.0
       value_bootstrap: false
       device: cuda:0
-      full_experiment_name: 0_gym_jabs_scratch_s13
+      full_experiment_name: 0_gym_jabs_scratch_s43
       train_dir: ${oc.env:STR_RUN_ROOT}/jabs_scratch
 pbt:
   enabled: false
 task_name: SimToolReal
-experiment: 0_gym_jabs_scratch_s13
+experiment: 0_gym_jabs_scratch_s43
 num_envs: 24576
-seed: 13
+seed: 43
 torch_deterministic: false
 max_iterations: ''
 physics_engine: physx
@@ -472,7 +472,7 @@ sigma: ''
 multi_gpu: false
 wandb_activate: true
 wandb_group: ${oc.env:STR_WANDB_GROUP}
-wandb_name: 0_gym_jabs_scratch_s13
+wandb_name: 0_gym_jabs_scratch_s43
 wandb_entity: ${oc.env:STR_WANDB_ENTITY}
 wandb_project: ${oc.env:STR_WANDB_PROJECT,action-bench-simtoolreal}
 wandb_tags: []
@@ -485,7 +485,7 @@ headless: true
 checkpoint_load_mode: weights
 wandb_notes: IsaacGym release-derived recipe; expanded limits; calibrated Gym physics;
   independent new lineage.
-full_experiment_name: 0_gym_jabs_scratch_s13
+full_experiment_name: 0_gym_jabs_scratch_s43
 campaign:
   key: jabs_scratch
   gpu: 2

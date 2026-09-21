@@ -267,6 +267,7 @@ class ModelA2CContinuousLogStd(BaseModel):
             input_dict['obs'] = self.norm_obs(input_dict['obs'])
             mu, logstd, value, states = self.a2c_network(input_dict)
             sigma = torch.exp(logstd)
+            eigen_sigma = self._eigadd_sigma(input_dict['obs'])
             distr = torch.distributions.Normal(mu, sigma, validate_args=False)
             if is_train:
                 entropy = distr.entropy().sum(dim=-1)
@@ -280,8 +281,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     # exact entropy of the additive Gaussian: diagonal part
                     # plus the capacitance logdet, kept in the graph so
                     # entropy_coef sees both sigma and the eigen loudness
-                    entropy = entropy + 0.5 * self._eigadd_logdet_k(sigma)
-                prev_neglogp = self.neglogp(prev_actions, mu, sigma, logstd)
+                    entropy = entropy + 0.5 * self._eigadd_logdet_k(sigma, eigen_sigma)
+                prev_neglogp = self.neglogp(prev_actions, mu, sigma, logstd, eigen_sigma)
                 result = {
                     'prev_neglogp' : torch.squeeze(prev_neglogp),
                     'values' : value,
@@ -290,6 +291,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'mus' : mu,
                     'sigmas' : sigma
                 }
+                if getattr(self.a2c_network, 'noise_eigadd_basis', None) is not None:
+                    result['eigen_sigmas'] = eigen_sigma
                 return result
             else:
                 corr = self._corr_factor()
@@ -299,9 +302,9 @@ class ModelA2CContinuousLogStd(BaseModel):
                 if A8 is not None:
                     # additive eigen noise: iid per-joint sample plus an
                     # independent sample along the K eigen directions
-                    s8 = torch.exp(self.a2c_network.noise_eigadd_logsig)
+                    s8 = eigen_sigma
                     eps = torch.randn_like(mu)
-                    eps8 = torch.randn(mu.shape[0], s8.numel(),
+                    eps8 = torch.randn(mu.shape[0], s8.shape[-1],
                                        device=mu.device, dtype=mu.dtype)
                     selected_action = mu + sigma * eps + (s8 * eps8) @ A8
                 elif corr is not None:
@@ -318,7 +321,7 @@ class ModelA2CContinuousLogStd(BaseModel):
                 else:
                     selected_action = distr.sample()
                 # selected_action = distr.mean # DEBUG
-                neglogp = self.neglogp(selected_action, mu, sigma, logstd)
+                neglogp = self.neglogp(selected_action, mu, sigma, logstd, eigen_sigma)
                 result = {
                     'neglogpacs' : torch.squeeze(neglogp),
                     'values' : self.denorm_value(value),
@@ -327,6 +330,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'mus' : mu,
                     'sigmas' : sigma
                 }
+                if getattr(self.a2c_network, 'noise_eigadd_basis', None) is not None:
+                    result['eigen_sigmas'] = eigen_sigma
                 return result
 
         def _corr_factor(self):
@@ -357,7 +362,20 @@ class ModelA2CContinuousLogStd(BaseModel):
             logdet_a = 0.5 * (torch.log(v).sum() - torch.log(d).sum())
             return A, v, d, logdet_a
 
-        def _eigadd_chol(self, std):
+        def _eigadd_sigma(self, obs):
+            net = self.a2c_network
+            logsig = getattr(net, 'noise_eigadd_logsig', None)
+            if logsig is None:
+                return None
+            if logsig.dim() == 2:
+                # Use the same group identifiers as the conditional IID head,
+                # including relabeled SAPG experience and shuffled RNN batches.
+                ids = (obs[:, net.sigma_id_idx].reshape(-1, 1)
+                       == net.sigma_ids).float().argmax(dim=1)
+                return logsig[ids].exp()
+            return logsig.exp().expand(obs.shape[0], -1)
+
+        def _eigadd_chol(self, std, eigen_sigma):
             """Cholesky of K = I + S B D^-1 B^T S for Sigma = D + B^T S^2 B.
 
             B is the (K, n) eigen direction block (arbitrary, not required to
@@ -366,7 +384,7 @@ class ModelA2CContinuousLogStd(BaseModel):
             """
             net = self.a2c_network
             B8 = net.noise_eigadd_basis
-            s = torch.exp(net.noise_eigadd_logsig)
+            s = eigen_sigma
             invvar = std.pow(-2)
             if invvar.dim() == 1:
                 invvar = invvar.unsqueeze(0)
@@ -378,26 +396,26 @@ class ModelA2CContinuousLogStd(BaseModel):
             # (measured 2026-09-06: peak 3451 -> 2571 MiB at 4096 envs,
             # identical to the plain arm once einsum was gone).
             G = torch.matmul(B8.unsqueeze(0) * invvar.unsqueeze(1), B8.t())
-            K = (s.unsqueeze(-1) * s.unsqueeze(0)) * G
-            K = K + torch.eye(s.numel(), device=K.device, dtype=K.dtype)
+            K = (s.unsqueeze(-1) * s.unsqueeze(-2)) * G
+            K = K + torch.eye(s.shape[-1], device=K.device, dtype=K.dtype)
             return torch.linalg.cholesky(K)
 
-        def _eigadd_logdet_k(self, std):
-            L = self._eigadd_chol(std)
+        def _eigadd_logdet_k(self, std, eigen_sigma):
+            L = self._eigadd_chol(std, eigen_sigma)
             return 2.0 * torch.log(
                 torch.diagonal(L, dim1=-2, dim2=-1)).sum(dim=-1)
 
-        def _eigadd_neglogp(self, x, mean, std, logstd):
+        def _eigadd_neglogp(self, x, mean, std, logstd, eigen_sigma):
             # Sigma = D + B^T S^2 B: Woodbury for the quadratic form and the
             # matrix determinant lemma for the logdet, both exact via the
             # K x K capacitance.
             net = self.a2c_network
             B8 = net.noise_eigadd_basis
-            s = torch.exp(net.noise_eigadd_logsig)
+            s = eigen_sigma
             delta = x - mean
             y2 = ((delta / std) ** 2).sum(dim=-1)
             w = ((delta / std.pow(2)) @ B8.t()) * s
-            L = self._eigadd_chol(std)
+            L = self._eigadd_chol(std, eigen_sigma)
             t = torch.cholesky_solve(w.unsqueeze(-1), L).squeeze(-1)
             logdet_k = 2.0 * torch.log(
                 torch.diagonal(L, dim1=-2, dim2=-1)).sum(dim=-1)
@@ -405,9 +423,11 @@ class ModelA2CContinuousLogStd(BaseModel):
                 + 0.5 * np.log(2.0 * np.pi) * x.size()[-1] \
                 + logstd.sum(dim=-1) + 0.5 * logdet_k
 
-        def neglogp(self, x, mean, std, logstd):
+        def neglogp(self, x, mean, std, logstd, eigen_sigma=None):
             if getattr(self.a2c_network, 'noise_eigadd_basis', None) is not None:
-                return self._eigadd_neglogp(x, mean, std, logstd)
+                if eigen_sigma is None:
+                    raise ValueError('additive eigen likelihood requires per-row scales')
+                return self._eigadd_neglogp(x, mean, std, logstd, eigen_sigma)
             corr = self._corr_factor()
             if corr is not None:
                 A, v, d, logdet_a = corr
